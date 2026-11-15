@@ -11,12 +11,12 @@ from schemas import (
 )
 from algorithm import calculate_capacity, select_tasks_for_sprint
 
-# Создаём таблицы при запуске
+# Создаем таблицы при запуске приложения
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Sprint Planner API")
 
-# Разрешаем запросы с фронтенда
+# Настройка CORS для запросов с фронтенда
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,6 +30,7 @@ app.add_middleware(
 
 @app.post("/members", response_model=dict)
 def create_member(member: MemberCreate, db: Session = Depends(get_db)):
+    """Создание нового сотрудника команды."""
     db_member = Member(**member.model_dump())
     db.add(db_member)
     db.commit()
@@ -39,6 +40,7 @@ def create_member(member: MemberCreate, db: Session = Depends(get_db)):
 
 @app.get("/members", response_model=List[dict])
 def get_members(db: Session = Depends(get_db)):
+    """Получение списка всех сотрудников."""
     return [
         {"id": m.id, "name": m.name, "role": m.role, "hours_per_day": m.hours_per_day}
         for m in db.query(Member).all()
@@ -47,8 +49,25 @@ def get_members(db: Session = Depends(get_db)):
 
 # ===== ЭНДПОИНТЫ: ОТСУТСТВИЯ =====
 
+@app.get("/absences", response_model=List[dict])
+def get_absences(db: Session = Depends(get_db)):
+    """Получение списка всех отсутствий сотрудников."""
+    return [
+        {
+            "id": a.id,
+            "member_id": a.member_id,
+            "member_name": a.member.name,
+            "start_date": a.start_date.isoformat(),
+            "end_date": a.end_date.isoformat(),
+            "reason": a.reason,
+        }
+        for a in db.query(Absence).all()
+    ]
+
+
 @app.post("/absences", response_model=dict)
 def create_absence(absence: AbsenceCreate, db: Session = Depends(get_db)):
+    """Добавление отсутствия (отпуск, больничный, праздник)."""
     db_absence = Absence(**absence.model_dump())
     db.add(db_absence)
     db.commit()
@@ -56,10 +75,22 @@ def create_absence(absence: AbsenceCreate, db: Session = Depends(get_db)):
     return {"id": db_absence.id, "member_id": db_absence.member_id}
 
 
+@app.delete("/absences/{absence_id}", response_model=dict)
+def delete_absence(absence_id: int, db: Session = Depends(get_db)):
+    """Удаление записи об отсутствии."""
+    absence = db.query(Absence).filter(Absence.id == absence_id).first()
+    if not absence:
+        raise HTTPException(status_code=404, detail="Отсутствие не найдено")
+    db.delete(absence)
+    db.commit()
+    return {"message": "Отсутствие удалено"}
+
+
 # ===== ЭНДПОИНТЫ: ЗАДАЧИ =====
 
 @app.post("/tasks", response_model=dict)
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+    """Добавление новой задачи в бэклог."""
     db_task = Task(**task.model_dump())
     db.add(db_task)
     db.commit()
@@ -69,6 +100,7 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 
 @app.get("/tasks", response_model=List[dict])
 def get_tasks(db: Session = Depends(get_db)):
+    """Получение списка всех задач из бэклога."""
     return [
         {
             "id": t.id,
@@ -80,29 +112,36 @@ def get_tasks(db: Session = Depends(get_db)):
     ]
 
 
-# ===== ГЛАВНЫЙ ЭНДПОИНТ: РАСЧЁТ СПРИНТА =====
+# ===== ГЛАВНЫЙ ЭНДПОИНТ: РАСЧЕТ СПРИНТА =====
 
 @app.post("/sprints/calculate", response_model=SprintResult)
 def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
     """
-    Главная функция: рассчитывает ёмкость команды и подбирает задачи.
+    Расчет доступной емкости команды и подбор задач для спринта.
+    
+    Алгоритм:
+    1. Считает рабочие дни в периоде спринта
+    2. Для каждого сотрудника вычитает дни отсутствий
+    3. Применяет коэффициент фокуса (по умолчанию 0.8)
+    4. Сортирует задачи по приоритету и подбирает их, пока не исчерпает емкость
     """
-    # 1. Получаем всех сотрудников и их отсутствия
+    # Получаем данные из БД
     members = db.query(Member).all()
     absences = db.query(Absence).all()
-    tasks = db.query(Task).filter(Task.sprint_id.is_(None)).all()
+    tasks = db.query(Task).all()
     
+    # Проверка наличия данных
     if not members:
         raise HTTPException(status_code=400, detail="Добавьте хотя бы одного сотрудника")
     if not tasks:
         raise HTTPException(status_code=400, detail="Добавьте хотя бы одну задачу")
     
-    # 2. Рассчитываем ёмкость
+    # Расчет доступной емкости команды
     capacity = calculate_capacity(
         members, absences, sprint_data.start_date, sprint_data.end_date, sprint_data.focus_factor
     )
     
-    # 3. Подбираем задачи
+    # Подбор задач по приоритету (жадный алгоритм)
     selected = select_tasks_for_sprint(tasks, capacity)
     selected_ids = [t.id for t in selected]
     all_ids = [t.id for t in tasks]
@@ -110,7 +149,7 @@ def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
     
     planned_hours = sum(t.estimated_hours for t in selected)
     
-    # 4. Создаём спринт в БД
+    # Сохранение результатов спринта в БД
     db_sprint = Sprint(
         name=sprint_data.name,
         start_date=sprint_data.start_date,
@@ -121,12 +160,6 @@ def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
     db.add(db_sprint)
     db.commit()
     db.refresh(db_sprint)
-    
-    # 5. Привязываем выбранные задачи к спринту
-    for task_id in selected_ids:
-        task = db.query(Task).filter(Task.id == task_id).first()
-        task.sprint_id = db_sprint.id
-    db.commit()
     
     return SprintResult(
         sprint_id=db_sprint.id,
@@ -139,6 +172,7 @@ def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
 
 @app.get("/sprints", response_model=List[dict])
 def get_sprints(db: Session = Depends(get_db)):
+    """Получение списка всех рассчитанных спринтов."""
     return [
         {
             "id": s.id,
@@ -149,13 +183,12 @@ def get_sprints(db: Session = Depends(get_db)):
         for s in db.query(Sprint).all()
     ]
 
+
 def seed_data():
-    """Автоматически заполняет БД тестовыми данными при первом запуске."""
+    """Заполнение БД тестовыми данными при первом запуске."""
     db = SessionLocal()
     try:
-        # Проверяем, есть ли уже данные
         if db.query(Member).count() == 0:
-            # Добавляем сотрудников
             members = [
                 Member(name="Вася", role="Backend Dev", hours_per_day=8),
                 Member(name="Петя", role="Frontend Dev", hours_per_day=6),
@@ -164,7 +197,6 @@ def seed_data():
             db.add_all(members)
             db.commit()
             
-            # Добавляем задачи
             tasks = [
                 Task(title="Написать API", description="Реализовать REST API", estimated_hours=40, priority=Priority.HIGH),
                 Task(title="Написать тесты", description="Unit-тесты для алгоритма", estimated_hours=20, priority=Priority.MEDIUM),
@@ -175,14 +207,13 @@ def seed_data():
             db.add_all(tasks)
             db.commit()
             
-            print("✅ База данных заполнена тестовыми данными")
+            print("База данных заполнена тестовыми данными")
         else:
-            print("ℹ️ База данных уже содержит данные, пропускаем заполнение")
+            print("База данных уже содержит данные, пропускаем заполнение")
     finally:
         db.close()
 
 
-# Вызываем функцию при запуске
 seed_data()
 
 if __name__ == "__main__":
