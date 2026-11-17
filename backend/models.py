@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, Enum, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
 import enum
@@ -23,6 +23,7 @@ class Member(Base):
     name = Column(String, nullable=False)
     role = Column(String, nullable=False)
     hours_per_day = Column(Integer, default=8)
+    is_active = Column(Boolean, default=True)  # Soft delete флаг
 
     absences = relationship("Absence", back_populates="member")
 
@@ -48,6 +49,8 @@ class Task(Base):
     estimated_hours = Column(Float, nullable=False)
     priority = Column(Enum(Priority), default=Priority.MEDIUM)
     sprint_id = Column(Integer, ForeignKey("sprints.id"), nullable=True)
+    is_active = Column(Boolean, default=True)  # Soft delete флаг
+
     sprint = relationship("Sprint", back_populates="tasks")
 
 

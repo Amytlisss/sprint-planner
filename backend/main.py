@@ -39,13 +39,128 @@ def create_member(member: MemberCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/members", response_model=List[dict])
-def get_members(db: Session = Depends(get_db)):
-    """Получение списка всех сотрудников."""
+def get_members(include_inactive: bool = False, db: Session = Depends(get_db)):
+    """Получение списка сотрудников. По умолчанию только активные."""
+    query = db.query(Member)
+    if not include_inactive:
+        query = query.filter(Member.is_active == True)
+    
     return [
-        {"id": m.id, "name": m.name, "role": m.role, "hours_per_day": m.hours_per_day}
-        for m in db.query(Member).all()
+        {"id": m.id, "name": m.name, "role": m.role, "hours_per_day": m.hours_per_day, "is_active": m.is_active}
+        for m in query.all()
     ]
 
+
+@app.put("/members/{member_id}", response_model=dict)
+def update_member(member_id: int, member: MemberCreate, db: Session = Depends(get_db)):
+    """Редактирование данных сотрудника."""
+    db_member = db.query(Member).filter(Member.id == member_id).first()
+    if not db_member:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    
+    db_member.name = member.name
+    db_member.role = member.role
+    db_member.hours_per_day = member.hours_per_day
+    db.commit()
+    db.refresh(db_member)
+    
+    return {"id": db_member.id, "name": db_member.name, "role": db_member.role}
+
+
+@app.delete("/members/{member_id}", response_model=dict)
+def delete_member(member_id: int, db: Session = Depends(get_db)):
+    """Мягкое удаление сотрудника (помечается как неактивный)."""
+    db_member = db.query(Member).filter(Member.id == member_id).first()
+    if not db_member:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    
+    db_member.is_active = False
+    db.commit()
+    return {"message": "Сотрудник деактивирован"}
+
+
+@app.post("/members/{member_id}/reactivate", response_model=dict)
+def reactivate_member(member_id: int, db: Session = Depends(get_db)):
+    """Восстановление деактивированного сотрудника."""
+    db_member = db.query(Member).filter(Member.id == member_id).first()
+    if not db_member:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    
+    db_member.is_active = True
+    db.commit()
+    return {"message": "Сотрудник восстановлен"}
+
+
+# ===== ЭНДПОИНТЫ: ЗАДАЧИ =====
+
+@app.post("/tasks", response_model=dict)
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+    """Добавление новой задачи в бэклог."""
+    db_task = Task(**task.model_dump())
+    db.add(db_task)
+    db.commit()
+    db.refresh(db_task)
+    return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
+
+
+@app.get("/tasks", response_model=List[dict])
+def get_tasks(include_inactive: bool = False, db: Session = Depends(get_db)):
+    """Получение списка задач. По умолчанию только активные."""
+    query = db.query(Task)
+    if not include_inactive:
+        query = query.filter(Task.is_active == True)
+    
+    return [
+        {
+            "id": t.id,
+            "title": t.title,
+            "estimated_hours": t.estimated_hours,
+            "priority": t.priority,
+            "is_active": t.is_active,
+        }
+        for t in query.all()
+    ]
+
+
+@app.put("/tasks/{task_id}", response_model=dict)
+def update_task(task_id: int, task: TaskCreate, db: Session = Depends(get_db)):
+    """Редактирование задачи."""
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    
+    db_task.title = task.title
+    db_task.description = task.description
+    db_task.estimated_hours = task.estimated_hours
+    db_task.priority = task.priority
+    db.commit()
+    db.refresh(db_task)
+    
+    return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
+
+
+@app.delete("/tasks/{task_id}", response_model=dict)
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    """Мягкое удаление задачи (помечается как неактивная)."""
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    
+    db_task.is_active = False
+    db.commit()
+    return {"message": "Задача деактивирована"}
+
+
+@app.post("/tasks/{task_id}/reactivate", response_model=dict)
+def reactivate_task(task_id: int, db: Session = Depends(get_db)):
+    """Восстановление деактивированной задачи."""
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    
+    db_task.is_active = True
+    db.commit()
+    return {"message": "Задача восстановлена"}
 
 # ===== ЭНДПОИНТЫ: ОТСУТСТВИЯ =====
 
@@ -86,51 +201,18 @@ def delete_absence(absence_id: int, db: Session = Depends(get_db)):
     return {"message": "Отсутствие удалено"}
 
 
-# ===== ЭНДПОИНТЫ: ЗАДАЧИ =====
-
-@app.post("/tasks", response_model=dict)
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    """Добавление новой задачи в бэклог."""
-    db_task = Task(**task.model_dump())
-    db.add(db_task)
-    db.commit()
-    db.refresh(db_task)
-    return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
-
-
-@app.get("/tasks", response_model=List[dict])
-def get_tasks(db: Session = Depends(get_db)):
-    """Получение списка всех задач из бэклога."""
-    return [
-        {
-            "id": t.id,
-            "title": t.title,
-            "estimated_hours": t.estimated_hours,
-            "priority": t.priority,
-        }
-        for t in db.query(Task).all()
-    ]
-
-
 # ===== ГЛАВНЫЙ ЭНДПОИНТ: РАСЧЕТ СПРИНТА =====
 
 @app.post("/sprints/calculate", response_model=SprintResult)
 def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
     """
     Расчет доступной емкости команды и подбор задач для спринта.
-    
-    Алгоритм:
-    1. Считает рабочие дни в периоде спринта
-    2. Для каждого сотрудника вычитает дни отсутствий
-    3. Применяет коэффициент фокуса (по умолчанию 0.8)
-    4. Сортирует задачи по приоритету и подбирает их, пока не исчерпает емкость
     """
-    # Получаем данные из БД
-    members = db.query(Member).all()
+    # Получаем только активных сотрудников и активные задачи
+    members = db.query(Member).filter(Member.is_active == True).all()
     absences = db.query(Absence).all()
-    tasks = db.query(Task).all()
+    tasks = db.query(Task).filter(Task.is_active == True).all()
     
-    # Проверка наличия данных
     if not members:
         raise HTTPException(status_code=400, detail="Добавьте хотя бы одного сотрудника")
     if not tasks:
@@ -168,7 +250,6 @@ def calculate_sprint(sprint_data: SprintCreate, db: Session = Depends(get_db)):
         selected_tasks=selected_ids,
         skipped_tasks=skipped_ids,
     )
-
 
 @app.get("/sprints", response_model=List[dict])
 def get_sprints(db: Session = Depends(get_db)):
@@ -213,8 +294,69 @@ def seed_data():
     finally:
         db.close()
 
+# ===== ЭНДПОИНТЫ: РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ СОТРУДНИКОВ =====
+
+@app.put("/members/{member_id}", response_model=dict)
+def update_member(member_id: int, member: MemberCreate, db: Session = Depends(get_db)):
+    """Редактирование данных сотрудника."""
+    db_member = db.query(Member).filter(Member.id == member_id).first()
+    if not db_member:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    
+    db_member.name = member.name
+    db_member.role = member.role
+    db_member.hours_per_day = member.hours_per_day
+    db.commit()
+    db.refresh(db_member)
+    
+    return {"id": db_member.id, "name": db_member.name, "role": db_member.role}
+
+
+@app.delete("/members/{member_id}", response_model=dict)
+def delete_member(member_id: int, db: Session = Depends(get_db)):
+    """Удаление сотрудника."""
+    db_member = db.query(Member).filter(Member.id == member_id).first()
+    if not db_member:
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    
+    db.delete(db_member)
+    db.commit()
+    return {"message": "Сотрудник удален"}
+
+
+# ===== ЭНДПОИНТЫ: РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ ЗАДАЧ =====
+
+@app.put("/tasks/{task_id}", response_model=dict)
+def update_task(task_id: int, task: TaskCreate, db: Session = Depends(get_db)):
+    """Редактирование задачи."""
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    
+    db_task.title = task.title
+    db_task.description = task.description
+    db_task.estimated_hours = task.estimated_hours
+    db_task.priority = task.priority
+    db.commit()
+    db.refresh(db_task)
+    
+    return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
+
+
+@app.delete("/tasks/{task_id}", response_model=dict)
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    """Удаление задачи."""
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    
+    db.delete(db_task)
+    db.commit()
+    return {"message": "Задача удалена"}
 
 seed_data()
+
+
 
 if __name__ == "__main__":
     import uvicorn
