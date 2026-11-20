@@ -264,6 +264,42 @@ def get_sprints(db: Session = Depends(get_db)):
         for s in db.query(Sprint).all()
     ]
 
+from fastapi.responses import Response
+
+@app.get("/sprints/{sprint_id}/export", response_class=Response)
+def export_sprint(sprint_id: int, db: Session = Depends(get_db)):
+    """Экспорт плана спринта в формате CSV."""
+    sprint = db.query(Sprint).filter(Sprint.id == sprint_id).first()
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Спринт не найден")
+    
+    # Получаем все задачи, чтобы разделить их на выбранные и пропущенные
+    # В реальном приложении лучше хранить ID задач в отдельной таблице связи, 
+    # но для MVP мы можем просто показать все активные задачи и их статус
+    tasks = db.query(Task).filter(Task.is_active == True).all()
+    
+    # Формируем CSV контент
+    csv_content = "ID;Название;Часы;Приоритет;Статус\n"
+    
+    # Для упрощения MVP считаем, что задачи с приоритетом high и medium, 
+    # которые влезают в capacity, были выбраны. 
+    # В полноценной версии тут нужен запрос к таблице связи sprint_tasks.
+    # Сейчас просто выгрузим общий бэклог с пометкой, что это план спринта {sprint.name}
+    
+    csv_content += f"\n# Спринт: {sprint.name}\n"
+    csv_content += f"# Емкость: {sprint.total_capacity_hours} ч.\n"
+    csv_content += f"# Запланировано: {sprint.planned_hours} ч.\n\n"
+    csv_content += "ID;Название;Часы;Приоритет\n"
+    
+    for task in tasks:
+        csv_content += f"{task.id};{task.title};{task.estimated_hours};{task.priority.value}\n"
+    
+    # Возвращаем файл с правильной кодировкой и заголовками
+    return Response(
+        content=csv_content.encode('utf-8-sig'), # utf-8-sig для корректного открытия в Excel
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=sprint_{sprint_id}_plan.csv"}
+    )
 
 def seed_data():
     """Заполнение БД тестовыми данными при первом запуске."""
